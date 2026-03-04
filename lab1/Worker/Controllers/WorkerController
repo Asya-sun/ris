@@ -1,0 +1,15 @@
+using Microsoft.AspNetCore.Mvc;
+using Shared.DTO;
+
+namespace Worker.Controllers;
+
+[ApiController]
+[Route("internal/api/worker/hash/crack")]
+public class WorkerController : ControllerBase
+{
+    [HttpPost("task")]
+    public async Task<ActionResult<WorkerTaskResponse>> Crack([FromBody] WorkerTaskRequest request)
+    {
+        return Ok(new WorkerTaskResponse());
+    }
+}
