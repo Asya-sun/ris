@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "mwKoshgwTTE=",
+  "success": true,
+  "projectFilePath": "/home/aleksandra/git/ris/lab1/Manager/Manager.csproj",
+  "expectedPackageFiles": [
+    "/home/aleksandra/.nuget/packages/microsoft.aspnetcore.openapi/9.0.13/microsoft.aspnetcore.openapi.9.0.13.nupkg.sha512",
+    "/home/aleksandra/.nuget/packages/microsoft.openapi/1.6.17/microsoft.openapi.1.6.17.nupkg.sha512"
+  ],
+  "logs": []
+}
