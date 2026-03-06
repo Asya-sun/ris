@@ -21,14 +21,6 @@ namespace Manager.DTO
          */
     );
 
-    // public record ManagerStatusRequest
-    // (
-    //     /*
-    //      * TODO:
-    //      * Add def
-    //      */
-    // );
-
     public record ManagerStatusResponse
     (
         string status,

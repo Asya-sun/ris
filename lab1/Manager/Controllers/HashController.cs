@@ -8,7 +8,7 @@ namespace Manager.ManagerController
 {
     [ApiController]
     [Route("api/hash")]
-    public class TableController : ControllerBase
+    public class HashController : ControllerBase
     {
         // POST crack
         [HttpPost("crack")]
@@ -22,8 +22,6 @@ namespace Manager.ManagerController
             var response = new ManagerCrackResponse(Guid.NewGuid());
             return Ok(response);
         }
-        
-// GET /api/hash/status?requestId=<UUID>
 
         [HttpGet("status")]
         public async Task<ActionResult<ManagerStatusResponse>> GetCrackStatus([FromQuery] Guid crackId)

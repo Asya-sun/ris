@@ -6,19 +6,38 @@ using System.Threading.Tasks;
 
 namespace Shared.DTO
 {
+
+    /*
+    * EndIndex is included in check by worker!!!
+    * TODO:
+    * think about it...
+    */
     public record WorkerTaskRequest
     (
+        Guid TastRequestId,
         string Hash,
         int MaxLength,
         long StartIndex,
         long EndIndex
-        // mb need to add string alphabet... idk...
+        /*
+         * TODO:
+         * think about add string alphabet... idk...
+         * Is it needed? Idk....
+         */
     );
 
     public record WorkerTaskResponse
     (
+        Guid TastRequestId,
         List<string> FoundWords,
-        long CheckedCount
+        long StartIndex,
+        long EndIndex,
+        long CheckedCount,
+        bool IsRequestDone 
+        /*
+         * TODO:
+         * think about name
+         */
     );
-       
+
 }
