@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Manager.DTO;
 using System.Text.Json;
+using Manager.Services;
 
 
 
@@ -10,34 +11,34 @@ namespace Manager.ManagerController
     [Route("api/hash")]
     public class HashController : ControllerBase
     {
+        private readonly ILogger<HashController> _logger;
+        private readonly IManagerService _managerService;
+        public HashController(
+            IManagerService tableManager,
+            ILogger<HashController> logger)
+        {
+            _managerService = tableManager;
+            _logger = logger;
+        }
+
         // POST crack
         [HttpPost("crack")]
         public async Task<ActionResult<ManagerCrackResponse>> CrackHash([FromBody] ManagerCrackRequest request)
         {
-            /*
-            * TODO:
-            * implement
-            */
+            var id = await _managerService.CreateCrackTask(request);
 
-            var response = new ManagerCrackResponse(Guid.NewGuid());
-            return Ok(response);
+            return Ok(new ManagerCrackResponse(id));
         }
 
         [HttpGet("status")]
         public async Task<ActionResult<ManagerStatusResponse>> GetCrackStatus([FromQuery] Guid crackId)
         {
-            /*
-            * TODO:
-            * implement
-            */
+            // TODO
+            // check if valid (here or in GetStatus())
 
-            var response = new ManagerStatusResponse(
-                "IN_PROGRESS",
-                0,
-                null
-            );
+            var status = _managerService.GetStatus(crackId);
 
-            return Ok(response);
+            return Ok(status);
         }
     }
     
