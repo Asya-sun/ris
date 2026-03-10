@@ -10,5 +10,7 @@ public interface IManagerService
     ManagerStatusResponse GetStatus(Guid requestId);
 
     void ProcessWorkerResult(WorkerTaskResponse response);
+
+    Guid RegisterWorker(WorkerRegisterRequest request);
     
 }

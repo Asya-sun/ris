@@ -6,12 +6,18 @@ using Shared.DTO;
 
 namespace Manager.Services;
 
+// TODO
+// what to do if there's new ManagerCrackRequest,
+// but still no workers?
+// think about it
 public class ManagerService : IManagerService
 {
     private ConcurrentDictionary<Guid, CrackTaskState> _taskStates = new();
     private readonly HttpClient _httpClient;
     private readonly ILogger<ManagerService> _logger;
     private readonly ManagerConfig _config;
+    
+    private readonly ConcurrentDictionary<Guid, WorkerInfo> _workers = new();
 
     public ManagerService(
         IOptions<ManagerConfig> config,
@@ -22,12 +28,27 @@ public class ManagerService : IManagerService
         _httpClient = httpClient;
         _logger = logger;
     }
-    /*
-    че тут вообще должно быть
-    1 воркеры
-    2 реакции на http- запросы
 
-    */
+    public Guid RegisterWorker(WorkerRegisterRequest request)
+    {
+        var id = Guid.NewGuid();
+        var worker = new WorkerInfo
+        {
+            WorkerId = id,
+            WorkerName = request.WorkerName,
+            Url = request.Url
+        };
+
+        _workers[id] = worker;
+
+        _logger.LogInformation(
+            "Worker registered {WorkerId} with {WorkerName} at {Url}",
+            worker.WorkerId,
+            worker.WorkerName,
+            worker.Url
+        );
+        return id;
+    }
 
     public async Task<Guid> CreateCrackTask(ManagerCrackRequest request)
     {
@@ -99,14 +120,22 @@ public class ManagerService : IManagerService
 
     private async Task DispatchTasks(Guid requestId, string hash, int maxLength, long total)
     {
-        int workers = _config.WorkerNumber;
+        var workers = _workers.Values.ToList();
 
-        long chunkSize = total / workers;
-
-        for (int i = 0; i < workers; i++)
+        if (workers.Count == 0)
         {
+            // TODO
+            // process this case... without exceptions
+            throw new Exception("No workers registered");
+        }
+        
+        long chunkSize = total / workers.Count;
+
+        for (int i = 0; i < workers.Count; i++)
+        {
+            var worker = workers[i];
             long start = i * chunkSize;
-            long end = (i == workers - 1)
+            long end = (i == workers.Count - 1)
                 ? total - 1
                 : (i + 1) * chunkSize - 1;
 
@@ -121,7 +150,7 @@ public class ManagerService : IManagerService
             try
             {
                 await _httpClient.PostAsJsonAsync(
-                    $"{_config.WorkerUrl}/internal/api/worker/hash/crack/task",
+                    $"{worker.Url}/internal/api/worker/hash/crack/task",
                     task
                 );
             }

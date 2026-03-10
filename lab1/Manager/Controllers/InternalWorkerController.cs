@@ -18,19 +18,21 @@ namespace Manager.ManagerController
         {
             _managerService = managerService;
         }
+        
+
+        [HttpPost("register")]
+        public async Task<ActionResult<WorkerRegisterResponse>> RegisterWorker([FromBody] WorkerRegisterRequest request)
+        {
+            var workerUid = _managerService.RegisterWorker(request);
+
+            return Ok(new WorkerRegisterResponse(workerUid));
+        }
 
 
         // POST result
         [HttpPost("result")]
         public IActionResult ReceiveResult([FromBody] WorkerTaskResponse response)
         {
-            /*
-            * TODO:
-            * implement
-
-            тут обновить инфу о задаче в _taskStates
-            */
-
             _managerService.ProcessWorkerResult(response);
 
             return Ok();
