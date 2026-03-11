@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using Shared.DTO;
 using Worker.Models;
@@ -10,20 +9,20 @@ namespace Worker.Services;
 
 public class HashCrackService : IHashCrackService
 {
-    // private readonly  WorkerConfig _config;
     private readonly char[] _alphabet;
+    private readonly WorkerConfig _config;
     private readonly ILogger<HashCrackService> _logger;
     private readonly HttpClient _httpClient;
 
     private const int REPORT_INTERVAL = 10000;
 
     public HashCrackService (
-        IOptions<WorkerConfig> config,
+        WorkerConfig config,
         ILogger<HashCrackService> logger,
         HttpClient httpClient)
     {
-        // _config = config.Value;
-        _alphabet = config.Value.Alphabet.ToCharArray();
+        _config = config;
+        _alphabet = config.Alphabet.ToCharArray();
         _logger = logger;
         _httpClient = httpClient;
     }
@@ -35,48 +34,112 @@ public class HashCrackService : IHashCrackService
 
     private async Task ProcessTask(WorkerTaskRequest request)
     {
-        var found = new List<string>();
-        long checkedCount = 0;
-        long startIndex = request.StartIndex;
-        long endIndex = 0;
 
-        
-        for (long index = request.StartIndex; index <= request.EndIndex; index++)
-        {
-            var word = IndexToWord(index, request.MaxLength);
-            checkedCount++;
+        try{
+            var found = new List<string>();
+            double checkedCount = 0;
+            long batchStart = (long)request.StartIndex;
+            double startIndex = request.StartIndex;
+            double endIndex = 0;
 
-            if (CalculateMD5(word) == request.Hash)
+            _logger.LogInformation(
+                "{WorkerName} got task {TaskId}: range [{Start}-{End}], maxLength={MaxLength}, hash={Hash}", 
+                _config.WorkerName,
+                request.TaskRequestId,
+                request.StartIndex,
+                request.EndIndex,
+                request.MaxLength,
+                request.Hash
+            );
+            
+
+            var startTime = DateTime.UtcNow;
+            
+            for (double index = request.StartIndex; index <= request.EndIndex; index++)
             {
-                found.Add(word);
+                var word = IndexToWord(index, request.MaxLength);
+                checkedCount++;
+
+                if (CalculateMD5(word) == request.Hash)
+                {
+                    found.Add(word);
+                    _logger.LogInformation(
+                        "{WorkerName} found word '{Word}' for task {TaskId} (index {Index})",
+                        _config.WorkerName,
+                        word,
+                        request.TaskRequestId,
+                        index
+                    );
+                }
+
+
+
+                if (checkedCount % REPORT_INTERVAL == 0)
+                {
+                    endIndex = index;
+                    await SendProgress(request.TaskRequestId, startIndex, endIndex, found, endIndex - startIndex + 1, false);
+                    
+
+                    var elapsed = DateTime.UtcNow - startTime;
+                    var speed = checkedCount / elapsed.TotalSeconds;
+
+                    _logger.LogInformation(
+                        "{WorkerName} task {TaskId}: checked {CheckedCount}/{TotalRange} words, found {FoundCount} words, speed: {Speed:F0} words/sec",
+                        _config.WorkerName,
+                        request.TaskRequestId,
+                        checkedCount,
+                        request.EndIndex - request.StartIndex + 1,
+                        found.Count,
+                        speed
+                    );
+
+
+
+                    // found.Clear();
+
+                    startIndex = index + 1;
+                }
             }
 
-            if (checkedCount % REPORT_INTERVAL == 0)
-            {
-                endIndex = index;
-                await SendProgress(request.TastRequestId, startIndex, endIndex, found, checkedCount, false);
-                startIndex = index + 1;
 
-                /*
-                * TODO:
-                * think about clearing found here
-                */
-            }
+            var totalTime = DateTime.UtcNow - startTime;
+            _logger.LogInformation(
+                "{WorkerName} completed task {TaskId}: checked {CheckedCount} words, found {FoundCount} words, time: {TotalTime:g}",
+                _config.WorkerName,
+                request.TaskRequestId,
+                checkedCount,
+                found.Count,
+                totalTime
+            );
+
+            await SendProgress( request.TaskRequestId, startIndex, request.EndIndex, found, request.EndIndex - startIndex + 1, true);
+
         }
-        if (checkedCount % REPORT_INTERVAL != 0)
+        catch (Exception ex)
         {
-            await SendProgress(request.TastRequestId, startIndex, request.EndIndex, found, checkedCount, true);
+            _logger.LogError(ex, "{WorkerName} failed processing task {TaskId}", 
+                _config.WorkerName, request.TaskRequestId);
         }
     }
 
     private async Task SendProgress(
     Guid taskId,
-    long startIndex,
-    long endIndex,
+    double startIndex,
+    double endIndex,
     List<string> foundWords,
-    long checkedCount,
+    double checkedCount,
     bool isCompleted)
     {
+
+        _logger.LogInformation(
+            "SENDING PROGRESS: task={TaskId}, start={Start}, end={End}, checkedCount={CheckedCount}, foundCount={FoundCount}, isCompleted={IsCompleted}",
+            taskId,
+            startIndex,
+            endIndex,
+            checkedCount,
+            foundWords.Count,
+            isCompleted
+        );
         var dto = new WorkerTaskResponse(
             taskId,
             foundWords,
@@ -86,19 +149,25 @@ public class HashCrackService : IHashCrackService
             isCompleted
         );
 
-        await _httpClient.PostAsJsonAsync(
-            "http://manager/internal/api/worker/result",
+        var response = await _httpClient.PostAsJsonAsync(
+            $"{_config.ManagerUrl}/internal/api/worker/result",
             dto
+        );
+
+        _logger.LogInformation(
+            "SEND PROGRESS RESPONSE: task={TaskId}, statusCode={StatusCode}",
+            taskId,
+            response.StatusCode
         );
     }
 
-    private string IndexToWord(long index, int maxLength) 
+    private string IndexToWord(double index, int maxLength) 
     { 
         var sb = new StringBuilder(); 
         long baseLen = _alphabet.Length; 
         do 
         { 
-            sb.Insert(0, _alphabet[index % baseLen]); 
+            sb.Insert(0, _alphabet[(int)index % baseLen]); 
             index /= baseLen; 
         } while (index > 0 && sb.Length < maxLength); 
         

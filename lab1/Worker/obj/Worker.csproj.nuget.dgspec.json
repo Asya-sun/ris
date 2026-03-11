@@ -107,9 +107,21 @@
         "net9.0": {
           "targetAlias": "net9.0",
           "dependencies": {
-            "Microsoft.AspNetCore.OpenApi": {
+            "Microsoft.Extensions.Http.Polly": {
               "target": "Package",
-              "version": "[9.0.13, )"
+              "version": "[10.0.4, )"
+            },
+            "Polly": {
+              "target": "Package",
+              "version": "[8.6.6, )"
+            },
+            "Serilog.AspNetCore": {
+              "target": "Package",
+              "version": "[10.0.0, )"
+            },
+            "Swashbuckle.AspNetCore": {
+              "target": "Package",
+              "version": "[10.1.4, )"
             }
           },
           "imports": [

@@ -33,12 +33,35 @@ namespace Manager.ManagerController
         [HttpGet("status")]
         public async Task<ActionResult<ManagerStatusResponse>> GetCrackStatus([FromQuery] Guid crackId)
         {
-            // TODO
-            // check if valid (here or in GetStatus())
+            _logger.LogInformation("GetCrackStatus called with crackId: {CrackId}", crackId);
+            
+            try
+            {
+                if (crackId == Guid.Empty)
+                {
 
-            var status = _managerService.GetStatus(crackId);
+                _logger.LogWarning("Empty crackId received");
+                    return BadRequest("Invalid crackId");
+                }
+                
+                var status = _managerService.GetStatus(crackId);
+                return Ok(status);
+            }
+            catch (KeyNotFoundException ex)
+            {
 
-            return Ok(status);
+                _logger.LogWarning(ex, "Task {CrackId} not found", crackId);
+                return NotFound(ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting status for {CrackId}", crackId);
+                return StatusCode(500, "Internal server error");
+            }
         }
     }
     

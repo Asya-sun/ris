@@ -23,7 +23,7 @@ namespace Manager.ManagerController
         [HttpPost("register")]
         public async Task<ActionResult<WorkerRegisterResponse>> RegisterWorker([FromBody] WorkerRegisterRequest request)
         {
-            var workerUid = _managerService.RegisterWorker(request);
+            var workerUid = await _managerService.RegisterWorker(request);
 
             return Ok(new WorkerRegisterResponse(workerUid));
         }

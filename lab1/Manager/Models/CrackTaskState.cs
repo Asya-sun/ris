@@ -7,9 +7,11 @@ public class CrackTaskState
 
     required public string Hash { get; init; }
 
-    public long TotalCombinations { get; set; }
+    public double TotalCombinations { get; set; }
 
-    public long CheckedCombinations { get; set; }
+    public int MaxLength { get; set; }
+
+    public double CheckedCombinations { get; set; }
 
     public List<string> FoundWords { get; set; } = new();
 

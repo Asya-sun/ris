@@ -1,5 +1,10 @@
 ## Got from another repo with labs
 
+
+# For testing
+logs/*
+*/venv
+
 # User-specific files
 *.rsuser
 *.suo

@@ -11,6 +11,6 @@ public interface IManagerService
 
     void ProcessWorkerResult(WorkerTaskResponse response);
 
-    Guid RegisterWorker(WorkerRegisterRequest request);
+    Task<Guid> RegisterWorker(WorkerRegisterRequest request);
     
 }

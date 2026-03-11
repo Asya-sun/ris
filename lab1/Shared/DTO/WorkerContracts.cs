@@ -6,19 +6,27 @@ using System.Threading.Tasks;
 
 namespace Shared.DTO
 {
+    public record WorkerRegisterRequest
+    (
+        string WorkerName,
+        string Url
+    );
+
+    public record WorkerRegisterResponse
+    (
+        Guid WorkerId
+    );
 
     /*
     * EndIndex is included in check by worker!!!
-    * TODO:
-    * think about it...
     */
     public record WorkerTaskRequest
     (
-        Guid TastRequestId,
+        Guid TaskRequestId,
         string Hash,
         int MaxLength,
-        long StartIndex,
-        long EndIndex
+        double StartIndex,
+        double EndIndex
         /*
          * TODO:
          * think about add string alphabet... idk...
@@ -28,16 +36,12 @@ namespace Shared.DTO
 
     public record WorkerTaskResponse
     (
-        Guid TastRequestId,
+        Guid TaskRequestId,
         List<string> FoundWords,
-        long StartIndex,
-        long EndIndex,
-        long CheckedCount,
+        double StartIndex,
+        double EndIndex,
+        double CheckedCount,
         bool IsRequestDone 
-        /*
-         * TODO:
-         * think about name
-         */
     );
 
 }
