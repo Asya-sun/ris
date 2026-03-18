@@ -44,4 +44,6 @@ namespace Shared.DTO
         bool IsRequestDone 
     );
 
+    public record CancelTaskRequest(Guid TaskId);
+
 }

@@ -13,6 +13,7 @@ public class HashCrackService : IHashCrackService
     private readonly WorkerConfig _config;
     private readonly ILogger<HashCrackService> _logger;
     private readonly HttpClient _httpClient;
+    private readonly ConcurrentDictionary<Guid, (Task Task, CancellationTokenSource Cts)> _activeTasks = new();
 
     private const int REPORT_INTERVAL = 10000;
 
@@ -29,10 +30,32 @@ public class HashCrackService : IHashCrackService
 
     public void StartTask(WorkerTaskRequest request)
     {
-        Task.Run(() => ProcessTask(request));
+        var cts = new CancellationTokenSource();
+        var task = Task.Run(() => ProcessTask(request, cts.Token), cts.Token);
+        
+        _activeTasks[request.TaskRequestId] = (task, cts);
+        
+        task.ContinueWith(t => {
+            _activeTasks.TryRemove(request.TaskRequestId, out _);
+            cts.Dispose();
+        });
     }
 
-    private async Task ProcessTask(WorkerTaskRequest request)
+    public void CancelTask(Guid taskId)
+    {
+        if (_activeTasks.TryRemove(taskId, out var entry))
+        {
+            _logger.LogInformation("Cancelling task {TaskId}", taskId);
+            entry.Cts.Cancel();
+            entry.Cts.Dispose();
+        }
+        else
+        {
+            _logger.LogWarning("Task {TaskId} not found for cancellation", taskId);
+        }
+    }
+
+    private async Task ProcessTask(WorkerTaskRequest request, CancellationToken cancellationToken)
     {
 
         try{
@@ -77,7 +100,7 @@ public class HashCrackService : IHashCrackService
                 if (checkedCount % REPORT_INTERVAL == 0)
                 {
                     endIndex = index;
-                    await SendProgress(request.TaskRequestId, startIndex, endIndex, found, endIndex - startIndex + 1, false);
+                    await SendProgress(request.TaskRequestId, startIndex, endIndex, found, endIndex - startIndex + 1, false, cancellationToken);
                     
 
                     var elapsed = DateTime.UtcNow - startTime;
@@ -112,7 +135,7 @@ public class HashCrackService : IHashCrackService
                 totalTime
             );
 
-            await SendProgress( request.TaskRequestId, startIndex, request.EndIndex, found, request.EndIndex - startIndex + 1, true);
+            await SendProgress( request.TaskRequestId, startIndex, request.EndIndex, found, request.EndIndex - startIndex + 1, true, cancellationToken);
 
         }
         catch (Exception ex)
@@ -120,15 +143,20 @@ public class HashCrackService : IHashCrackService
             _logger.LogError(ex, "{WorkerName} failed processing task {TaskId}", 
                 _config.WorkerName, request.TaskRequestId);
         }
+        finally
+        {
+            _activeTasks.TryRemove(request.TaskRequestId, out _);
+        }
     }
 
     private async Task SendProgress(
-    Guid taskId,
-    double startIndex,
-    double endIndex,
-    List<string> foundWords,
-    double checkedCount,
-    bool isCompleted)
+        Guid taskId,
+        double startIndex,
+        double endIndex,
+        List<string> foundWords,
+        double checkedCount,
+        bool isCompleted,
+        CancellationToken cancellationToken)
     {
 
         _logger.LogInformation(
@@ -151,7 +179,8 @@ public class HashCrackService : IHashCrackService
 
         var response = await _httpClient.PostAsJsonAsync(
             $"{_config.ManagerUrl}/internal/api/worker/result",
-            dto
+            dto,
+            cancellationToken
         );
 
         _logger.LogInformation(
@@ -182,4 +211,3 @@ public class HashCrackService : IHashCrackService
         return BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
     }
 }
-

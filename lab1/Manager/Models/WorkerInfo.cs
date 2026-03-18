@@ -10,4 +10,9 @@ public class WorkerInfo
 
     public string Url { get; init; } = "http://worker"; // ?
 
+    // for health check
+    public bool IsAlive { get; set; } = true;
+    public DateTime LastSeen { get; set; } = DateTime.UtcNow;
+    public DateTime RegisteredAt { get; init; } = DateTime.UtcNow;
+
 }

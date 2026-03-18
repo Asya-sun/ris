@@ -16,4 +16,8 @@ public class CrackTaskState
     public List<string> FoundWords { get; set; } = new();
 
     public CrackStatus Status { get; set; } = CrackStatus.IN_PROGRESS;
+
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
 }

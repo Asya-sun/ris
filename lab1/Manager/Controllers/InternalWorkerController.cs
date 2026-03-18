@@ -13,10 +13,13 @@ namespace Manager.ManagerController
     {
 
         private readonly IManagerService _managerService;
+        private readonly ILogger<InternalWorkerController> _logger;
 
-        public InternalWorkerController(IManagerService managerService)
+        public InternalWorkerController(IManagerService managerService,
+            ILogger<InternalWorkerController> logger)
         {
             _managerService = managerService;
+            _logger = logger;
         }
         
 
@@ -35,6 +38,20 @@ namespace Manager.ManagerController
         {
             _managerService.ProcessWorkerResult(response);
 
+            return Ok();
+        }
+
+        [HttpGet("health")]
+        public IActionResult Health()
+        {
+            return Ok();
+        }
+
+        [HttpPost("task/cancel")]
+        public async Task<IActionResult> CancelTask([FromBody] CancelTaskRequest request)
+        {
+            _logger.LogInformation("Forwarding cancel request for task {TaskId} to workers", request.TaskId);
+            await _managerService.CancelTask(request.TaskId);
             return Ok();
         }
 

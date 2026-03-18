@@ -3,7 +3,6 @@ WORKDIR /src
 
 COPY . .
 
-# RUN dotnet publish -c Release -o /app
 RUN dotnet publish Worker/Worker.csproj -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:9.0

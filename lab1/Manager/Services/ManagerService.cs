@@ -69,7 +69,8 @@ public class ManagerService : IManagerService
             CheckedCombinations = 0,
             Status = CrackStatus.PENDING,
             MaxLength = request.MaxLength,
-            FoundWords = new List<string>()
+            FoundWords = new List<string>(),
+            StartedAt = DateTime.UtcNow,
         };
 
         _taskStates[id] = task;
@@ -171,6 +172,7 @@ public class ManagerService : IManagerService
             if (task.CheckedCombinations >= task.TotalCombinations)
             {
                 task.Status = CrackStatus.READY;
+                task.CompletedAt = DateTime.UtcNow;
                 _logger.LogInformation(
                     "TASK {TaskId} COMPLETED! Total words found: {FoundCount}",
                     response.TaskRequestId,
@@ -203,14 +205,22 @@ public class ManagerService : IManagerService
             _logger.LogWarning("No workers registered, dispatch postponed");
             return;
         }
-        
-        double chunkSize = total / workers.Count;
 
-        for (int i = 0; i < workers.Count; i++)
+        var aliveWorkers = workers.Where(w => w.IsAlive).ToList();
+
+        if (aliveWorkers.Count == 0)
         {
-            var worker = workers[i];
+            _logger.LogWarning("No alive workers for task {RequestId}", requestId);
+            return;
+        }
+        
+        double chunkSize = total / aliveWorkers.Count;
+
+        for (int i = 0; i < aliveWorkers.Count; i++)
+        {
+            var worker = aliveWorkers[i];
             double start = i * chunkSize;
-            double end = (i == workers.Count - 1)
+            double end = (i == aliveWorkers.Count - 1)
                 ? total - 1
                 : (i + 1) * chunkSize - 1;
 
@@ -288,5 +298,119 @@ public class ManagerService : IManagerService
                 _logger.LogError(ex, "Failed to dispatch pending task");
             }
         }
+    }
+
+
+
+    public List<WorkerInfo> GetAllWorkers()
+    {
+        return _workers.Values.ToList();
+    }
+
+    public void UpdateWorkerHealth(Guid workerId, bool isAlive)
+    {
+        if (_workers.TryGetValue(workerId, out var worker))
+        {
+            worker.IsAlive = isAlive;
+            worker.LastSeen = DateTime.UtcNow;
+            
+            _logger.LogDebug("Worker {WorkerName} health updated: {IsAlive}", 
+                worker.WorkerName, isAlive);
+        }
+    }
+
+
+    public void CheckTaskTimeouts(TimeSpan timeout)
+    {
+        var now = DateTime.UtcNow;
+        var timedOutTasks = _taskStates.Values
+            .Where(t => t.Status == CrackStatus.IN_PROGRESS 
+                        && t.StartedAt.HasValue 
+                        && now - t.StartedAt.Value > timeout)
+            .ToList();
+
+        foreach (var task in timedOutTasks)
+        {
+            lock (task)
+            {
+                task.Status = CrackStatus.ERROR;
+                _logger.LogWarning("Task {TaskId} timed out", task.RequestId);
+            }
+        }
+    }
+
+    public async Task CancelTask(Guid taskId)
+    {   
+        _logger.LogInformation("CancelTask called for {TaskId}", taskId);
+        
+        if (!_taskStates.TryGetValue(taskId, out var task))
+        {
+            _logger.LogWarning("Task {TaskId} not found for cancellation", taskId);
+            return;
+        }
+    
+        lock (task)
+        {
+            if (task.Status == CrackStatus.IN_PROGRESS || task.Status == CrackStatus.PENDING)
+            {
+                task.Status = CrackStatus.ERROR;
+            }
+            else
+            {
+                _logger.LogInformation("Task {TaskId} already in state {Status}, skipping cancel", 
+                    taskId, task.Status);
+                return;
+            }
+        }
+    
+        // Отправляем сигнал отмены всем воркерам
+        var workers = _workers.Values.Where(w => w.IsAlive).ToList();
+        var cancelTasks = new List<Task>();
+    
+        foreach (var worker in workers)
+        {
+            cancelTasks.Add(SendCancelToWorker(worker, taskId));
+        }
+    
+        await Task.WhenAll(cancelTasks);
+        
+        _logger.LogInformation("Task {TaskId} cancelled", taskId);
+    }
+
+    private async Task SendCancelToWorker(WorkerInfo worker, Guid taskId)
+    {
+        try
+        {
+            var response = await _httpClient.PostAsJsonAsync(
+                $"{worker.Url}/internal/api/worker/hash/crack/cancel",
+                new { TaskId = taskId }
+            );
+            
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogDebug("Cancel signal sent to worker {WorkerName} for task {TaskId}", 
+                    worker.WorkerName, taskId);
+            }
+            else
+            {
+                _logger.LogWarning("Worker {WorkerName} returned {StatusCode} for cancel task {TaskId}", 
+                    worker.WorkerName, response.StatusCode, taskId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send cancel to worker {WorkerName} for task {TaskId}", 
+                worker.WorkerName, taskId);
+        }
+    }
+
+    public List<CrackTaskState> GetTimedOutTasks(TimeSpan timeout)
+    {
+        var now = DateTime.UtcNow;
+        return _taskStates.Values
+            .Where(t => t.Status == CrackStatus.IN_PROGRESS 
+                        && t.StartedAt.HasValue 
+                        && now - t.StartedAt.Value > timeout)
+            .ToList();
     }
 }

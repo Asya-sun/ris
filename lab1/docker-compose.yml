@@ -9,6 +9,8 @@ services:
       - "8080:8080"
     environment:
       - ALPHABET=abcdefghijklmnopqrstuvwxyz0123456789
+      - CHECK_INTERVAL_SEC=20
+      - TASK_TIMEOUT_MIN=1
     networks:
       - cracknet
     # volumes:
