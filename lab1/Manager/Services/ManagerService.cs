@@ -17,12 +17,10 @@ public class ManagerService : IManagerService
 
     public ManagerService(
         IOptions<ManagerConfig> config,
-        // HttpClient httpClient,
         IHttpClientFactory httpClientFactory,
         ILogger<ManagerService> logger)
     {
         _config = config.Value;
-        // _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _httpClient = httpClientFactory.CreateClient();
         _logger = logger;
     }
@@ -111,8 +109,6 @@ public class ManagerService : IManagerService
         
         int progress = (int)(100.0 * task.CheckedCombinations / task.TotalCombinations);
 
-        // TODO 
-        // put to method?..
         var status = task.Status switch
         {
             CrackStatus.PENDING => "IN_PROGRESS",
@@ -143,20 +139,39 @@ public class ManagerService : IManagerService
         lock (task)
         {
 
-            _logger.LogInformation(
-                "BEFORE: task={TaskId}, totalCombinations={Total}, currentChecked={CurrentChecked}",
-                response.TaskRequestId,
-                task.TotalCombinations,
-                task.CheckedCombinations
-            );
+            
+
+            if (task.WorkersProgress.TryGetValue(response.WorkerId, out var workerProgress))
+            {
+                // обновление прогресса
+                workerProgress.CheckedCount += response.CheckedCount;
+                workerProgress.LastReportTime = DateTime.UtcNow;
+                
+                if (response.IsRequestDone)
+                {
+                    workerProgress.IsCompleted = true;
+                    _logger.LogInformation(
+                        "Worker {WorkerName} completed its range for task {TaskId}",
+                        workerProgress.WorkerName,
+                        task.RequestId
+                    );
+                }
+                
+                _logger.LogDebug(
+                    "Worker {WorkerName} progress: {CheckedCount}/{TotalInRange} ({Progress:F1}%)",
+                    workerProgress.WorkerName,
+                    workerProgress.CheckedCount,
+                    workerProgress.RangeEnd - workerProgress.RangeStart + 1,
+                    workerProgress.ProgressPercent
+                );
+            }
+            else
+            {
+                _logger.LogWarning("No progress record found for worker {WorkerId} in task {TaskId}", 
+                    response.WorkerId, response.TaskRequestId);
+            }
 
             task.CheckedCombinations += response.CheckedCount;
-
-            _logger.LogInformation(
-                "AFTER ADD: task={TaskId}, newChecked={NewChecked}",
-                response.TaskRequestId,
-                task.CheckedCombinations
-            );
 
             foreach (var word in response.FoundWords)
             {
@@ -166,16 +181,26 @@ public class ManagerService : IManagerService
                     _logger.LogInformation("ADDED WORD '{Word}' to task {TaskId}", word, response.TaskRequestId);
                 }
             }
-    
-            // task.FoundWords.AddRange(response.FoundWords);
 
-            if (task.CheckedCombinations >= task.TotalCombinations)
+            // Проверяем, все ли воркеры завершили
+            if (task.WorkersProgress.Values.All(w => w.IsCompleted))
             {
                 task.Status = CrackStatus.READY;
                 task.CompletedAt = DateTime.UtcNow;
                 _logger.LogInformation(
-                    "TASK {TaskId} COMPLETED! Total words found: {FoundCount}",
-                    response.TaskRequestId,
+                    "TASK {TaskId} COMPLETED! All workers finished. Found {FoundCount} words",
+                    task.RequestId,
+                    task.FoundWords.Count
+                );
+            }
+            else if (task.CheckedCombinations >= task.TotalCombinations)
+            {
+                // подстраховка
+                task.Status = CrackStatus.READY;
+                task.CompletedAt = DateTime.UtcNow;
+                _logger.LogInformation(
+                    "TASK {TaskId} COMPLETED! Total combinations reached. Found {FoundCount} words",
+                    task.RequestId,
                     task.FoundWords.Count
                 );
             }
@@ -241,6 +266,20 @@ public class ManagerService : IManagerService
                 end
             );
 
+            var taskState = _taskStates[requestId];
+            
+            taskState.AssignedWorkers.Add(worker.WorkerId);
+
+            taskState.WorkersProgress[worker.WorkerId] = new WorkerProgress
+            {
+                WorkerId = worker.WorkerId,
+                WorkerName = worker.WorkerName,
+                RangeStart = start,
+                RangeEnd = end,
+                CheckedCount = 0,
+                LastReportTime = DateTime.UtcNow
+            };
+
             try
             {
                 var response = await _httpClient.PostAsJsonAsync(
@@ -261,11 +300,11 @@ public class ManagerService : IManagerService
                         requestId
                     );
                 }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to dispatch task to worker");
-                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to dispatch task to worker");
+            }
         }
     }
 
@@ -307,15 +346,24 @@ public class ManagerService : IManagerService
         return _workers.Values.ToList();
     }
 
-    public void UpdateWorkerHealth(Guid workerId, bool isAlive)
+    public void UpdateWorkerHealth(Guid workerId, bool isAlive, bool resetFailedChecks = true)
     {
         if (_workers.TryGetValue(workerId, out var worker))
         {
             worker.IsAlive = isAlive;
             worker.LastSeen = DateTime.UtcNow;
             
-            _logger.LogDebug("Worker {WorkerName} health updated: {IsAlive}", 
-                worker.WorkerName, isAlive);
+            if (isAlive)
+            {
+                worker.FailedHealthChecks = 0;
+            }
+            else if (!resetFailedChecks)
+            {
+                worker.FailedHealthChecks++;
+            }
+            
+            _logger.LogDebug("Worker {WorkerName} health updated: IsAlive={IsAlive}, FailedChecks={FailedChecks}", 
+                worker.WorkerName, isAlive, worker.FailedHealthChecks);
         }
     }
 
@@ -342,7 +390,7 @@ public class ManagerService : IManagerService
     public async Task CancelTask(Guid taskId)
     {   
         _logger.LogInformation("CancelTask called for {TaskId}", taskId);
-        
+
         if (!_taskStates.TryGetValue(taskId, out var task))
         {
             _logger.LogWarning("Task {TaskId} not found for cancellation", taskId);
@@ -413,4 +461,198 @@ public class ManagerService : IManagerService
                         && now - t.StartedAt.Value > timeout)
             .ToList();
     }
+
+
+    public void RemoveDeadWorkers(int maxFailedChecks)
+    {
+        var deadWorkers = _workers.Values
+            .Where(w => !w.IsAlive && w.FailedHealthChecks >= maxFailedChecks)
+            .ToList();
+
+        
+
+        foreach (var worker in deadWorkers)
+        {
+            // find all tasks that worker has to do
+            var affectedTasks = _taskStates.Values
+                .Where(t => t.AssignedWorkers.Contains(worker.WorkerId) 
+                            && t.Status == CrackStatus.IN_PROGRESS)
+                .ToList();
+
+            if (_workers.TryRemove(worker.WorkerId, out var removed))
+            {
+                _logger.LogWarning("Worker {WorkerName} ({WorkerUrl}) removed after {FailedChecks} failed health checks", 
+                    worker.WorkerName, worker.Url, worker.FailedHealthChecks);
+            }
+
+
+            foreach (var task in affectedTasks)
+            {
+                task.AssignedWorkers.Remove(worker.WorkerId);
+                
+                _logger.LogWarning("Task {TaskId} lost worker {WorkerName}, reassigning...", 
+                    task.RequestId, worker.WorkerName);
+                
+                _ = Task.Run(() => ReassignTask(task, worker));
+            }
+        }
+    }
+
+
+    private async Task ReassignTask(CrackTaskState task, WorkerInfo deadWorker)
+    {
+        if (!task.WorkersProgress.TryGetValue(deadWorker.WorkerId, out var deadProgress))
+        {
+            _logger.LogWarning("No progress found for dead worker {WorkerName} in task {TaskId}", 
+                deadWorker.WorkerName, task.RequestId);
+            return;
+        }
+        
+        var aliveWorkers = _workers.Values.Where(w => w.IsAlive).ToList();
+        double remainingWords = deadProgress.RangeEnd - deadProgress.RangeStart + 1 - deadProgress.CheckedCount;
+        double currentStart = deadProgress.RangeStart + deadProgress.CheckedCount;
+        
+        await ReassignTask(task, deadWorker, aliveWorkers, currentStart, remainingWords);
+    }
+
+    private async Task ReassignTask(
+        CrackTaskState task, 
+        WorkerInfo deadWorker, 
+        List<WorkerInfo> targetWorkers, 
+        double start, 
+        double remainingWords)
+    {
+        _logger.LogInformation(
+            "REASSIGN: Task {TaskId} lost worker {WorkerName}, attempting reassign...",
+            task.RequestId, deadWorker.WorkerName
+        );
+
+        // Находим прогресс мертвого воркера
+        if (!task.WorkersProgress.TryGetValue(deadWorker.WorkerId, out var deadProgress))
+        {
+            _logger.LogWarning("No progress found for dead worker {WorkerName} in task {TaskId}", 
+                deadWorker.WorkerName, task.RequestId);
+            return;
+        }
+
+        
+        // Сколько уже сделано
+        double alreadyChecked = deadProgress.CheckedCount;
+        double totalInRange = deadProgress.RangeEnd - deadProgress.RangeStart + 1;
+        
+        
+        _logger.LogInformation(
+            "Worker {WorkerName} checked {AlreadyChecked}/{TotalInRange} words ({Progress:F1}%) before dying",
+            deadWorker.WorkerName, alreadyChecked, totalInRange, deadProgress.ProgressPercent
+        );
+        
+        var remainingWorkers = _workers.Values.Where(w => w.IsAlive).ToList();
+        if (!remainingWorkers.Any())
+        {
+            _logger.LogError("No alive workers to reassign task {TaskId}", task.RequestId);
+            task.Status = CrackStatus.ERROR;
+            return;
+        }
+        double remaining = remainingWords;
+        double chunkSize = remainingWords / remainingWorkers.Count;
+        double remainder = remainingWords % remainingWorkers.Count;
+        
+        double currentStart = deadProgress.RangeStart + deadProgress.CheckedCount;
+        var failedWorkers = new List<WorkerInfo>();
+        
+        for (int i = 0; i < remainingWorkers.Count; i++)
+        {
+            var worker = remainingWorkers[i];
+            
+            double newStart = currentStart;
+            double newEnd = currentStart + chunkSize - 1;
+            
+            if (i == remainingWorkers.Count - 1)
+            {
+                newEnd += remainder;
+            }
+            
+            var newTaskRequest = new WorkerTaskRequest(
+                task.RequestId,
+                task.Hash,
+                task.MaxLength,
+                newStart,
+                newEnd
+            );
+            
+            try
+            {
+                await _httpClient.PostAsJsonAsync(
+                    $"{worker.Url}/internal/api/worker/hash/crack/task",
+                    newTaskRequest
+                );
+                
+                task.AssignedWorkers.Add(worker.WorkerId);
+                
+                task.WorkersProgress[worker.WorkerId] = new WorkerProgress
+                {
+                    WorkerId = worker.WorkerId,
+                    WorkerName = worker.WorkerName,
+                    RangeStart = newStart,
+                    RangeEnd = newEnd,
+                    CheckedCount = 0,
+                    LastReportTime = DateTime.UtcNow,
+                    IsCompleted = false
+                };
+                
+                _logger.LogInformation("Part of task {TaskId} reassigned to {WorkerName}", 
+                    task.RequestId, worker.WorkerName);
+                    
+                currentStart = newEnd + 1;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to reassign part of task {TaskId} to {WorkerName}", 
+                    task.RequestId, worker.WorkerName);
+                
+                // Запоминаем, что этот воркер упал
+                failedWorkers.Add(worker);
+            }
+        }
+    
+        // Если были ошибки — перераспределяем оставшиеся куски
+        if (failedWorkers.Any())
+        {
+            var remainingAfterFailure = remainingWorkers
+                .Where(w => !failedWorkers.Contains(w))
+                .ToList();
+                
+            if (remainingAfterFailure.Any() && currentStart <= deadProgress.RangeEnd)
+            {
+                _logger.LogInformation(
+                    "Retrying reassignment of remaining range [{CurrentStart}-{RangeEnd}] with {Count} workers",
+                    currentStart, deadProgress.RangeEnd, remainingAfterFailure.Count);
+                
+                var remainingDeadProgress = new WorkerProgress
+                {
+                    WorkerId = deadWorker.WorkerId,
+                    WorkerName = deadWorker.WorkerName,
+                    RangeStart = currentStart,
+                    RangeEnd = deadProgress.RangeEnd,
+                    CheckedCount = 0,
+                    LastReportTime = DateTime.UtcNow
+                };
+                
+                await ReassignTask(task, deadWorker, remainingAfterFailure, currentStart, 
+                    deadProgress.RangeEnd - currentStart + 1);
+            }
+            else
+            {
+                _logger.LogError("No workers left to reassign remaining part of task {TaskId}", task.RequestId);
+                task.Status = CrackStatus.ERROR;
+            }
+        }
+        else
+        {
+            // Удаляем запись о мертвом воркере только если все успешно
+            task.WorkersProgress.TryRemove(deadWorker.WorkerId, out _);
+            task.AssignedWorkers.Remove(deadWorker.WorkerId);
+        }
+    }
+
 }

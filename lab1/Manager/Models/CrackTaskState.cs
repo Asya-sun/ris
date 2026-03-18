@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace Manager.Models;
 
 public class CrackTaskState
@@ -20,4 +22,12 @@ public class CrackTaskState
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
+
+    public List<Guid> AssignedWorkers { get; set; } = new();
+
+    public ConcurrentDictionary<Guid, WorkerProgress> WorkersProgress { get; set; } = new();
+    
+    public double TotalProgress => AssignedWorkers.Count > 0
+        ? WorkersProgress.Values.Average(w => w.ProgressPercent)
+        : 0;
 }

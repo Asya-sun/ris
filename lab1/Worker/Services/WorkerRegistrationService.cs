@@ -38,11 +38,23 @@ public class WorkerRegistrationService : BackgroundService
         {
             try
             {
-                await _httpClient.PostAsJsonAsync(
+                var response = await _httpClient.PostAsJsonAsync(
                     $"{managerUrl}/internal/api/worker/register",
                     request,
                     stoppingToken
                 );
+
+                response.EnsureSuccessStatusCode();
+                
+                var result = await response.Content.ReadFromJsonAsync<WorkerRegisterResponse>();
+                
+                if (result == null)
+                {
+                    _logger.LogError("Failed to deserialize worker registration response");
+                    return;
+                }
+
+                _config.WorkerId = result.WorkerId;
 
                 _logger.LogInformation("Worker registered successfully");
                 return;

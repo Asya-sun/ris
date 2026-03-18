@@ -90,6 +90,12 @@ Manager (Менеджер)
 ```
 
 
+## Sequence Diagrams
+![Создание задачи клиентом](pictures/CREATE_TASK.png)
+![Отправка прогресса воркерами](pictures/progress_by_workers.png) 
+![Запрос статуса клиентом](pictures/status_by_client.png)
+![HealthCheck](pictures/healthcheck.png) 
+
 ## Описание API
 
 ### External API (Manager) - для клиентов

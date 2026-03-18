@@ -36,6 +36,7 @@ namespace Shared.DTO
 
     public record WorkerTaskResponse
     (
+        Guid WorkerId,
         Guid TaskRequestId,
         List<string> FoundWords,
         double StartIndex,

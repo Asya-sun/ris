@@ -14,5 +14,5 @@ public class WorkerInfo
     public bool IsAlive { get; set; } = true;
     public DateTime LastSeen { get; set; } = DateTime.UtcNow;
     public DateTime RegisteredAt { get; init; } = DateTime.UtcNow;
-
+    public int FailedHealthChecks { get; set; } = 0;
 }

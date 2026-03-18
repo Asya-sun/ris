@@ -15,7 +15,7 @@ public class HashCrackService : IHashCrackService
     private readonly HttpClient _httpClient;
     private readonly ConcurrentDictionary<Guid, (Task Task, CancellationTokenSource Cts)> _activeTasks = new();
 
-    private const int REPORT_INTERVAL = 10000;
+    private const int REPORT_INTERVAL = 100000;
 
     public HashCrackService (
         WorkerConfig config,
@@ -116,10 +116,6 @@ public class HashCrackService : IHashCrackService
                         speed
                     );
 
-
-
-                    // found.Clear();
-
                     startIndex = index + 1;
                 }
             }
@@ -169,6 +165,7 @@ public class HashCrackService : IHashCrackService
             isCompleted
         );
         var dto = new WorkerTaskResponse(
+            _config.WorkerId,
             taskId,
             foundWords,
             startIndex,

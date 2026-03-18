@@ -11,6 +11,7 @@ public class WorkerHealthCheckService : BackgroundService
     private readonly IHttpClientFactory _httpClientFactory; 
     private readonly TimeSpan _checkInterval = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _timeout = TimeSpan.FromSeconds(5);
+    private readonly int _maxFailedChecks = 3;
 
     public WorkerHealthCheckService(
         ILogger<WorkerHealthCheckService> logger,
@@ -63,14 +64,15 @@ public class WorkerHealthCheckService : BackgroundService
                 _logger.LogInformation("Checking health for {WorkerName} at {Url}", 
                     worker.WorkerName, healthUrl);
                 var response = await client.GetAsync(healthUrl, cts.Token);
-                // var response = await client.GetAsync($"{worker.Url}/internal/api/worker/health", cts.Token);
+                
                 
                 _logger.LogInformation("Health check response from {WorkerName}: {StatusCode}", 
                     worker.WorkerName, response.StatusCode);
                 bool isAlive = response.IsSuccessStatusCode;
                 
-                _managerService.UpdateWorkerHealth(worker.WorkerId, isAlive);
+                _managerService.UpdateWorkerHealth(worker.WorkerId, isAlive, resetFailedChecks: false);
                 
+
                 if (!isAlive && worker.IsAlive)
                 {
                     _logger.LogWarning("Worker {WorkerName} ({WorkerUrl}) is not responding", 
@@ -79,13 +81,23 @@ public class WorkerHealthCheckService : BackgroundService
                 else if (isAlive && !worker.IsAlive)
                 {
                     _logger.LogInformation("Worker {WorkerName} is back online", worker.WorkerName);
+                    _managerService.UpdateWorkerHealth(worker.WorkerId, false, resetFailedChecks: true);
+        
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Health check failed for worker {WorkerName}", worker.WorkerName);
-                _managerService.UpdateWorkerHealth(worker.WorkerId, false);
+                _managerService.UpdateWorkerHealth(worker.WorkerId, false, resetFailedChecks: false);
             }
+
+
         }
+
+        _managerService.RemoveDeadWorkers(_maxFailedChecks);
+
+        var remainingWorkers = _managerService.GetAllWorkers();
+        _logger.LogInformation("After cleanup: {Count} workers remaining", remainingWorkers.Count);
+    
     }
 }
