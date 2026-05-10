@@ -1,0 +1,199 @@
+services:
+  mongodb-primary:
+    image: mongo:8.0
+    command: mongod --replSet rs0 --bind_ip_all
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_primary_data:/data/db
+    networks:
+      - cracknet
+
+  mongodb-secondary-1:
+    image: mongo:8.0
+    command: mongod --replSet rs0 --bind_ip_all
+    volumes:
+      - mongo_secondary1_data:/data/db
+    depends_on:
+      - mongodb-primary
+    networks:
+      - cracknet
+
+  mongodb-secondary-2:
+    image: mongo:8.0
+    command: mongod --replSet rs0 --bind_ip_all
+    volumes:
+      - mongo_secondary2_data:/data/db
+    depends_on:
+      - mongodb-primary
+    networks:
+      - cracknet
+
+  # mongodb-init:
+  #   image: mongo:8.0
+  #   depends_on:
+  #     - mongodb-primary
+  #     - mongodb-secondary-1
+  #     - mongodb-secondary-2
+  #   entrypoint: >
+  #     bash -c "sleep 10 && 
+  #     mongosh --host mongodb-primary --eval '
+  #       rs.initiate({
+  #         _id: \"rs0\",
+  #         members: [
+  #           {_id: 0, host: \"mongodb-primary:27017\"},
+  #           {_id: 1, host: \"mongodb-secondary-1:27017\"},
+  #           {_id: 2, host: \"mongodb-secondary-2:27017\"}
+  #         ]
+  #       })
+  #     '"
+  #   networks:
+  #     - cracknet
+
+  mongodb-init:
+    image: mongo:8.0
+    depends_on:
+      - mongodb-primary
+      - mongodb-secondary-1
+      - mongodb-secondary-2
+    entrypoint: >
+      bash -c "
+        sleep 10 &&
+        mongosh --host mongodb-primary --eval '
+          try {
+            rs.status();
+            print(\"Replica set already initialized\");
+          } catch (e) {
+            rs.initiate({
+              _id: \"rs0\",
+              members: [
+                {_id: 0, host: \"mongodb-primary:27017\"},
+                {_id: 1, host: \"mongodb-secondary-1:27017\"},
+                {_id: 2, host: \"mongodb-secondary-2:27017\"}
+              ]
+            });
+            print(\"Replica set initialized\");
+          }
+        '
+      "
+    networks:
+      - cracknet
+
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cracknet
+
+
+  manager:
+    build:
+      context: .
+      dockerfile: Manager/Dockerfile
+    container_name: manager
+    ports:
+      - "8080:8080"
+    environment:
+      - ALPHABET=abcdefghijklmnopqrstuvwxyz0123456789
+      - CHECK_INTERVAL_SEC=5
+      - CHECK_INTERVAL_SEC=30
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin
+      - MONGO_CONNECTION=mongodb://mongodb-primary:27017,mongodb-secondary-1:27017,mongodb-secondary-2:27017/?replicaSet=rs0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb-primary:
+        condition: service_started
+      mongodb-secondary-1:
+        condition: service_started
+      mongodb-secondary-2:
+        condition: service_started
+      mongodb-init:
+        condition: service_completed_successfully
+      
+    networks:
+      - cracknet
+
+
+  worker1:
+    build:
+      context: .
+      dockerfile: Worker/Dockerfile
+    container_name: worker1
+    environment:
+      - WORKER_NAME=worker1
+      - STOP_WORD=bom
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin
+      - ALPHABET=abcdefghijklmnopqrstuvwxyz0123456789
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cracknet
+    restart: on-failure
+
+  worker2:
+    build:
+      context: .
+      dockerfile: Worker/Dockerfile
+    container_name: worker2
+    environment:
+      - WORKER_NAME=worker2
+      - STOP_WORD=bom
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin
+      - ALPHABET=abcdefghijklmnopqrstuvwxyz0123456789
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cracknet
+    restart: on-failure
+
+  worker3:
+    build:
+      context: .
+      dockerfile: Worker/Dockerfile
+    container_name: worker3
+    environment:
+      - WORKER_NAME=worker3
+      - STOP_WORD=bom
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin
+      - ALPHABET=abcdefghijklmnopqrstuvwxyz0123456789
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cracknet
+    restart: on-failure
+
+volumes:
+  mongo_primary_data:
+  mongo_secondary1_data:
+  mongo_secondary2_data:
+  rabbitmq_data:
+
+networks:
+  cracknet:
+    driver: bridge
