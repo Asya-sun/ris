@@ -15,7 +15,7 @@ var config = new ManagerConfig
     CheckInterval = TimeSpan.FromSeconds(
         int.Parse(Environment.GetEnvironmentVariable("CHECK_INTERVAL_SEC") ?? "60")),
     TaskTimeout = TimeSpan.FromSeconds(
-        int.Parse(Environment.GetEnvironmentVariable("CHECK_INTERVAL_SEC") ?? "60"))
+        int.Parse(Environment.GetEnvironmentVariable("TASK_TIMEOUT_SEC") ?? "2"))
 };
 
 // Register Configuration
@@ -42,7 +42,6 @@ builder.Services.AddHostedService<RabbitMqResultConsumer>();
 
 
 var app = builder.Build();
-
 
 app.Lifetime.ApplicationStarted.Register(() =>
 {

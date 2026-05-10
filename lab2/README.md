@@ -11,35 +11,31 @@ Manager (Менеджер)
 
 - Принимает REST-запросы от клиента на взлом хэша
 
-- Управляет пулом воркеров (регистрация, health-чеки, отслеживание доступности)
+- Сохраняет состояние задачи в MongoDB 
 
-- Разбивает общее пространство перебора на диапазоны индексов и распределяет задачи между воркерами
+- Разбивает общее пространство перебора на подзадачи и публикует их в очередь RabbitMQ
 
-- Агрегирует промежуточные результаты от воркеров
+- Принимает результаты от воркеров через очередь RabbitMQ
 
-- Отслеживает прогресс выполнения задачи и формирует итоговый ответ
+- Агрегирует прогресс и формирует итоговый ответ
 
-- Хранит информацию о задачах и воркерах в оперативной памяти с использованием потокобезопасных коллекций (ConcurrentDictionary)
+- Отслеживает зависшие подзадачи (таймауты) и переотправляет их
+
+- При рестарте восстанавливает незавершенные задачи из MongoDB
 
 ### Worker (Воркер)
 
 Воркер — вычислительный узел, который:
 
-- При запуске регистрируется в менеджере (передаёт своё имя и URL)
+- При запуске подписывается на очередь задач RabbitMQ
 
-- Регулярно отвечает на health-запросы менеджера (эндпоинт /health)
+- Получает задачу: диапазон индексов, хэш, максимальную длину слова
 
-- Получает от менеджера задачу: диапазон индексов [StartIndex, EndIndex], хэш для поиска, максимальную длину слова
+- Генерирует слова итеративно, вычисляет MD5, сравнивает с целевым
 
-- Генерирует слова итеративно по индексу (не хранит все комбинации в памяти) — полный перебор с использованием алфавита
+- Отправляет промежуточные и финальные результаты в очередь результатов RabbitMQ
 
-- Вычисляет MD5-хэш для каждого слова и сравнивает с целевым
-
-- При совпадении сохраняет найденное слово
-
-- Каждые REPORT_INTERVAL (10 000) проверенных слов отправляет менеджеру отчёт с прогрессом и найденными словами
-
-- Поддерживает отмену задачи по запросу менеджера (через CancellationToken)
+- При обнаружении стоп-слова имитирует критическую ошибку
 
 
 ### Схема взаимодействия компонентов
@@ -47,54 +43,77 @@ Manager (Менеджер)
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                                  CLIENT                                     │
 │                                                                             │
-│    POST /api/hash/crack         GET /api/hash/status?requestId=<UUID>       │
+│    POST /api/hash/crack         GET /api/hash/status?crackId=<UUID>         │
 │    {hash, maxLength}            → {status, progress, data}                  │
 └─────────────────────────────────────┬───────────────────────────────────────┘
                                       │
-                                      │ External API (JSON)
+                                      │ HTTP (REST API)
                                       │
 ┌─────────────────────────────────────▼───────────────────────────────────────┐
-│                           MANAGER SERVICE                                   │
-│                              (Port 8080)                                    │
+│                           MANAGER SERVICE (Port 8080)                       │
 │                                                                             │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐  │
-│  │ Task Management │  │ Worker Registry │  │ Progress & Health           │  │
-│  │                 │  │                 │  │                             │  │
-│  │ • Create tasks  │  │ • Registration  │  │ • Aggregate worker results  │  │
-│  │ • Split ranges  │  │ • Health checks │  │ • Calculate total progress  │  │
-│  │ • Distribute    │  │ • Track alive   │  │ • Detect timeouts           │  │
-│  │ • Cancel tasks  │  │   workers       │  │ • Mark tasks as ERROR       │  │
+│  │ Task Management │  │ MongoRepository │  │ Fault Tolerance             │  │
+│  │ • Create tasks  │  │ • Save state    │  │ • Restore pending tasks     │  │
+│  │ • Split ranges  │  │ • Update        │  │ • Retry timed-out subtasks  │  │
+│  │ • Aggregate     │  │   progress      │  │ • Mark ERROR on max retries │  │
 │  └─────────────────┘  └─────────────────┘  └─────────────────────────────┘  │
-└───────────┬─────────────────────────────────────────────────┬───────────────┘
-            │                                                 │
-            │ Internal API                   Progress Reports │
-            │ POST /internal/api/worker/     (push model)     │
-            │      hash/crack/task                            │
-            │ POST /internal/api/worker/                      │
-            │      hash/crack/cancel                          │
-            │ GET  /internal/api/worker/health                │
-            ▼                                                 │
+└───┬──────────────────┬──────────────────────────────┬───────────────────────┘
+    │                  │                              │
+    │ Publish tasks    │ Consume results              │ Read/Write state
+    ▼                  │                              │
+┌──────────────────────▼──────────┐    ┌──────────────▼─────────────────────┐
+│         RABBITMQ                │    │      MongoDB Replica Set           │
+│  ┌─────────────────────────────┐│    │  ┌────────────┐ ┌────────────┐     │
+│  │ crack_tasks (queue)         ││    │  │  Primary   │ │ Secondary  │     │
+│  │ → DLQ: crack_tasks_dlq      ││    │  │  (write)   │ │  (read)    │     │
+│  └─────────────────────────────┘│    │  └────────────┘ └────────────┘     │
+│  ┌─────────────────────────────┐│    │         ┌────────────┐             │
+│  │ crack_results (queue)       ││    │         │ Secondary  │             │
+│  └─────────────────────────────┘│    │         │  (read)    │             │
+└───────────────────────┬─────────┘    └────────────────────────────────────┘
+    │ Consume tasks     │ Publish results
+    ▼                   │
 ┌───────────────────────────────────────────────────────────────────────────────┐
 │                          WORKER SERVICES (1..N)                               │
-│                                                                               │
 │   ┌─────────────────────┐   ┌─────────────────────┐   ┌───────────────────┐   │
 │   │     Worker 1        │   │     Worker 2        │   │    Worker 3       │   │
 │   │  Range: [0, N/3)    │   │  Range: [N/3, 2N/3) │   │  Range: [2N/3, N] │   │
-│   │                     │   │                     │   │                   │   │
-│   │ • Word generation   │   │ • Word generation   │   │ • Word generation │   │
-│   │ • MD5 hashing       │   │ • MD5 hashing       │   │ • MD5 hashing     │   │
-│   │ • Progress reports  │   │ • Progress reports  │   │ • Progress reports│   │
-│   │ • Cancel support    │   │ • Cancel support    │   │ • Cancel support  │   │
+│   │  • Word generation  │   │  • Word generation  │   │  • Word generation│   │
+│   │  • MD5 hashing      │   │  • MD5 hashing      │   │  • MD5 hashing    │   │
+│   │  • Stop-word check  │   │  • Stop-word check  │   │  • Stop-word check│   │
 │   └─────────────────────┘   └─────────────────────┘   └───────────────────┘   │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Отказоустойчивость
 
-## Sequence Diagrams
-![Создание задачи клиентом](pictures/CREATE_TASK.png)
-![Отправка прогресса воркерами](pictures/progress_by_workers.png) 
-![Запрос статуса клиентом](pictures/status_by_client.png)
-![HealthCheck](pictures/healthcheck.png) 
+### Сохранность данных при отказе менеджера
+- Все задачи и прогресс хранятся в MongoDB (реплицируемой)
+- При рестарте менеджер восстанавливает незавершtнные задачи из БД
+- Необработанные результаты из очереди не теряются
+
+### Отказоустойчивость MongoDB
+- Настроен Replica Set: 1 Primary + 2 Secondary
+- Write Concern: Majority — запись подтверждается большинством нод
+- Read Preference: SecondaryPreferred — чтение с secondary для снижения нагрузки
+- При отказе Primary автоматически выбирается новый Primary
+
+### Сохранность данных при отказе воркера
+- Очередь RabbitMQ с подтверждениями (ack)
+- Если воркер не ответил за TASK_TIMEOUT_MIN, подзадача переотправляется другому воркеру
+- После 3 неудачных попыток задача помечается как ERROR
+
+### Сохранность данных при отказе RabbitMQ
+- Все сообщения персистентные (Persistent + DeliveryMode=2)
+- При рестарте RabbitMQ сообщения восстанавливаются
+- Менеджер сохраняет подзадачи в БД до публикации в очередь
+
+### Dead Letter Queue
+- Стоп-слово (STOP_WORD) при обнаружении вызывает исключение в воркере
+- Сообщение после ошибки перемещается в crack_tasks_dlq
+- Администратор может просмотреть DLQ через GET /api/hash/dlq
+
 
 ## Описание API
 
@@ -170,73 +189,30 @@ Manager (Менеджер)
 }
 ```
 ---
+#### GET /api/hash/dlq
 
-### Internal API (Manager) - для воркеров
-Этот интерфейс используется воркерами для регистрации в системе менеджера и отправки результатов. Не предназначен для внешних клиентов.
-
-
-**Request:**
-
-```json
-{
-    "workerName": "CoolName",
-    "url": "http://worker-1:5000"
-}
-```
+Просмотр сообщений в Dead Letter Queue (для администратора).
 
 **Response (200 OK):**
-
 ```json
 {
-    "workerId": "a1b2c3d4-1111-2222-3333-444444444444"
+  "count": 1,
+  "messages": [
+    {
+      "deliveryTag": 1,
+      "content": "{\"RequestId\":\"...\",\"SubTaskId\":\"...\",...}",
+      "reason": "Stop-word encountered",
+      "receivedAt": "2026-05-10T15:30:00Z"
+    }
+  ]
 }
 ```
-
-#### POST /api/tasks/progress
-
-Прием результатов выполнения части задачи от воркера.
-
-**Request:**
-
-```json
-{
-  "taskRequestId": "0160c0ac-5c32-4145-ac08-0ff3f9042401",
-  "foundWords": [],
-  "startIndex": 5000,
-  "endIndex": 10000,
-  "checkedCount": ,
-  "isRequestDone": false,
-}
-```
-
 ---
-
-
-### Internal API (Worker) - для менеджера
-
-
-
-#### POST /api/v1/tasks/
-
-Отправка воркеру части диапазона для перебора
-
-**Request:**
-
-```json
-{
-  "taskRequestId": "0160c0ac-5c32-4145-ac08-0ff3f9042401",
-  "hash": "e2fc714c4727ee9395f324cd2e7f331f",
-  "maxLength": 4,
-  "startIndex": 0,
-  "endIndex": 500000
-}
-```
 
 ## Инструкция по запуску
 
 ### Предварительные требования
 - установленные  Docker и Docker Compose
-- Python 3.12 (для запуска теста crack-test)
 
 
 ### Запуск системы в Docker
@@ -270,40 +246,128 @@ docker compose up
 docker compose up 2>&1 | tee logs.txt
 ```
 
-### Запуск тестов
-#### Через программу на python 
-Микро тест для проверки =)
-1. Настройка окружения для тестов
-```
-# Перейти в директорию с тестами
-cd lab1/crack-test
 
-# Установить venv (если не установлен)
-sudo apt update
-sudo apt install python3.12-venv
 
-# Создать виртуальное окружение
-python3 -m venv venv
 
-# Активировать виртуальное окружение
-source venv/bin/activate
-
-# Установить зависимости
-pip install requests
-```
-
-2. Запуск тестов
-```
-# Запустить тесты (убедитесь, что Docker контейнеры уже запущены)
-python test_crack.py
-```
-
-3. Завершение работы с тестами
-```
-# Деактивировать виртуальное окружение
-deactivate
-```
 #### Посмотреть через Swagger
 если программа запущена в docker
 [для воркера](http://localhost:8081/swagger/index.html) 
 [для менеджера](http://localhost:8080/swagger/index.html) 
+
+
+
+
+## Тестирование отказоустойчивости
+### Сценарий 1. Остановка менеджера
+
+```
+curl -X POST http://localhost:8080/api/hash/crack \
+  -H "Content-Type: application/json" \
+  -d '{"hash":"912ec803b2ce49e4a541068d495ab570", "maxLength":4}' && \
+docker compose stop manager
+
+# Смотри логи воркеров – они завершат вычисления.
+docker-compose start manager -d
+
+# Ждем {"status":"READY","progress":100,"data":["asdf"]}
+
+curl "http://localhost:8080/api/hash/status?crackId="
+```
+
+---
+
+### Сценарий 2. Отказ primary MongoDB
+```
+# 
+curl -X POST http://localhost:8080/api/hash/crack \
+  -H "Content-Type: application/json" \
+  -d '{"hash":"040b7cf4a55014e185813e0644502ea9", "maxLength":5}' && \
+docker compose stop mongodb-primary
+
+# как проверить, какая нода primary?
+docker exec -it lab2-mongodb-secondary-1-1 mongosh --eval "rs.status().members.map(m => ({name: m.name, state: m.stateStr}))"
+
+# будет что то вроде
+# [
+#   { name: 'mongodb-primary:27017', state: 'SECONDARY' },
+#   { name: 'mongodb-secondary-1:27017', state: 'PRIMARY' },
+#   { name: 'mongodb-secondary-2:27017', state: 'SECONDARY' }
+# ]
+
+
+
+# Ждем ~30 секунд. Проверяем статус задачу – должно быть IN_PROGRESS или READY
+
+curl "http://localhost:8080/api/hash/status?crackId="
+
+docker compose start mongodb-primary
+
+```
+
+---
+
+### Сценарий 3. Стоп RabbitMQ
+```
+# останавливаем rabbitmq
+docker compose stop rabbitmq
+
+# создаем задачу
+curl -X POST http://localhost:8080/api/hash/crack \
+-H "Content-Type: application/json" \
+-d '{"hash":"040b7cf4a55014e185813e0644502ea9", "maxLength":5}'
+
+# проверяем - задача создана, но процесс нулеовй
+curl "http://localhost:8080/api/hash/status?crackId="
+
+
+# восстанавливаем rabbitmq
+docker-compose start rabbitmq
+
+
+# Через CHECK_INTERVAL_SEC / TASK_TIMEOUT_SEC секунд TaskTimeoutService вызовет RetryPendingPublishes и отправит задачи
+```
+
+---
+
+
+### Сценарий 4. Остановка воркера
+```
+#
+curl -X POST http://localhost:8080/api/hash/crack \
+  -H "Content-Type: application/json" \
+  -d '{"hash":"9e9d7a08e048e9d604b79460b54969c3", "maxLength":5}'
+
+# Когда воркер начнёт обработку, остановить его: 
+
+   
+docker compose stop worker1
+
+# 
+curl "http://localhost:8080/api/hash/status?crackId="
+
+
+
+# Ждем TASK_TIMEOUT_MIN=1 
+# (это ставим в docker-compose.yml).
+# Логи менеджера должны показать таймаут и переотправку.
+
+# Задача должна завершиться (READY).
+curl "http://localhost:8080/api/hash/status?crackId="
+```
+
+---
+
+
+### Сценарий 5. Stop-word и DLQ
+```
+# Создай ID6 с хешем bom и maxLength=3.
+
+#Воркер, получивший подзадачу с bom, выбросит исключение, сообщение уйдёт в DLQ. Менеджер через 
+#таймаут зафиксирует подвисшую подзадачу, инкрементирует RetryCount и переотправит. После 3-х 
+#таймаутов (RetryCount >= 3) CheckTimedOutSubtasks пометит задачу как ERROR.
+
+# Проверяем статус
+curl "http://localhost:8080/api/hash/status?crackId="
+
+# Провеяем DLQ: curl http://localhost:8080/api/hash/dlq – должны быть сообщения.
+```

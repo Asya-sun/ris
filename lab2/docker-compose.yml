@@ -110,7 +110,7 @@ services:
     environment:
       - ALPHABET=abcdefghijklmnopqrstuvwxyz0123456789
       - CHECK_INTERVAL_SEC=5
-      - CHECK_INTERVAL_SEC=30
+      - TASK_TIMEOUT_SEC=30
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_USER=admin
       - RABBITMQ_PASSWORD=admin
