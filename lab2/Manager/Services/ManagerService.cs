@@ -26,7 +26,7 @@ public class ManagerService : IManagerService
         _mongoRepo = mongoRepo;
         _rabbitPublisher = rabbitPublisher;
     }
-
+    /// <inheritdoc />
     public async Task<Guid> CreateCrackTask(ManagerCrackRequest request)
     {
         var id = Guid.NewGuid();
@@ -63,6 +63,7 @@ public class ManagerService : IManagerService
 
         return id;
     }
+
 
     private async Task CreateAndDispatchSubTasks(Guid requestId, string hash, int maxLength, long total, CrackRequestEntity entity)
     {
@@ -123,6 +124,8 @@ public class ManagerService : IManagerService
 
     }
 
+
+    /// <inheritdoc />
     public async Task<ManagerStatusResponse> GetStatus(Guid requestId)
     {
         if (requestId == Guid.Empty)
@@ -160,6 +163,7 @@ public class ManagerService : IManagerService
     }
 
 
+    /// <inheritdoc />
     public async Task ProcessProgress(RabbitProgressMessage progress)
     {
         if (progress == null)
@@ -198,6 +202,8 @@ public class ManagerService : IManagerService
         return total;
     }
 
+
+    /// <inheritdoc />
     public async Task CheckTimedOutSubtasks(TimeSpan timeout)
     {
         _logger.LogDebug("Checking for timed out subtasks (timeout: {Timeout})", timeout);
@@ -266,6 +272,7 @@ public class ManagerService : IManagerService
     }
 
 
+    /// <inheritdoc />
     public async Task RestorePendingTasks()
     {
         _logger.LogInformation("Restoring pending tasks after restart...");
@@ -321,6 +328,7 @@ public class ManagerService : IManagerService
     }
 
 
+    /// <inheritdoc />
     public async Task RetryPendingPublishes()
     {
         var requests = await _mongoRepo.GetRequestsWithUnpublishedSubtasks();
@@ -354,6 +362,9 @@ public class ManagerService : IManagerService
             }
         }
     }
+
+
+    /// <inheritdoc />
     public async Task MarkTaskAsError(Guid requestId, string errorMessage)
     {
         await _mongoRepo.MarkTaskStatus(requestId, CrackStatus.ERROR, errorMessage);
